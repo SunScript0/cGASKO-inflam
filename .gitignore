@@ -1,2 +1,7 @@
 *.Rdata
 *.zip
+RNA/pipeline_out/04_mapped
+ATAC/pipeline_out/07_peaksets_and_tables
+NANO/data
+CUTnTAG/pipeline_out
+CUTnTAG/annotation

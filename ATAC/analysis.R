@@ -11,25 +11,29 @@ library(clusterProfiler)
 library(org.Mm.eg.db)
 library(BSgenome.Mmusculus.UCSC.mm39)
 library(TFBSTools)
+library(seqinr)
+library(zoo)
+library(ggrastr)
 
-setwd("/scratch/fmorandi/internal/John/cGAS_KO/PAPER/ATAC/")
+setwd("/scratch/fmorandi/internal/John/cGAS_KO/PAPER_CODE/ATAC/")
 
 paths = list()
 paths$data = "./pipeline_out"
 paths$results = "./results"
 paths$gtf = "/scratch/fmorandi/external/references/GRCm39-mm39-Ensembl/Mus_musculus.GRCm39.108.gtf"
-paths$seqs = "./results/seqs"
+paths$tables = paste0(paths$results, "/tables")
+paths$seqs = paste0(paths$results, "/seqs")
+paths$paper_figs = paste0(paths$results, "/prelim_paper_figs")
 
-#### FIGURE STORAGE (added for report) ####
+dir.create(paths$results, showWarnings = F)
+dir.create(paths$tables, showWarnings = F)
+dir.create(paths$seqs, showWarnings = F)
+dir.create(paths$paper_figs, showWarnings = F)
 
-figs = list()
+#### PLOTTING SETTINGS ####
 
-##### PLOTTING SETTINGS #####
-
-w = 174 # mm
-h = 230
-w_in = w*0.0393701
-h_in = h*0.0393701
+w_in = 7.5 # 8.5 without margin
+h_in = 10 # 11 without margin
 
 #### FUNCTIONS ####
 
@@ -55,16 +59,24 @@ tpm = function(counts, lengths) {
   return(tmp)
 }
 
-my_volcano = function(table, col, v1, v2, title=NULL, xmax=4, ymax=10) {
+my_volcano = function(table, col, v1, v2, title=NULL, xmax=4, ymax=10, raster=F) {
   tmp = table %>%
     group_by_at(col, .drop = F) %>%
     summarize(n=n()) %>%
     mutate(x = c(-xmax*0.9, 0, xmax*0.9))
-  p = ggplot(table, aes(x=.data[[v1]], y=-log10(.data[[v2]]), color=.data[[col]]))+
-    geom_point(size=0.1)+
-    lims(x=c(-xmax, xmax), y=c(0,ymax))+
-    ggtitle(title)+
-    geom_text(data=tmp, aes(x=x, y=ymax, label=n))
+  if (raster) {
+    p = ggplot(table, aes(x=.data[[v1]], y=-log10(.data[[v2]]), color=.data[[col]]))+
+      geom_point_rast(size=0.1)+
+      lims(x=c(-xmax, xmax), y=c(0,ymax))+
+      ggtitle(title)+
+      geom_text(data=tmp, aes(x=x, y=ymax, label=n))
+  } else {
+    p = ggplot(table, aes(x=.data[[v1]], y=-log10(.data[[v2]]), color=.data[[col]]))+
+      geom_point(size=0.1)+
+      lims(x=c(-xmax, xmax), y=c(0,ymax))+
+      ggtitle(title)+
+      geom_text(data=tmp, aes(x=x, y=ymax, label=n))
+  }
   if (!is.null(title)) p = p + ggtitle(title)
   return(p)
 }
@@ -83,8 +95,8 @@ convert_ids_in_string = function(df, id_col, id, symbol) {
 }
 
 #### PREPROCESS ####
-# 
-# meta = read.table(paste0(paths$data, "/meta.txt"), header = T)
+
+# meta = read.table("meta.txt", header = T)
 # 
 # data_ocr = fread(paste0(paths$data, "/07_peaksets_and_tables/counts.tsv"),
 #                       header=T, data.table=F)
@@ -92,13 +104,13 @@ convert_ids_in_string = function(df, id_col, id, symbol) {
 #                     header=T, data.table=F)
 # 
 # # Separate feature info
-# all(data_ocr$Geneid == data_ocr_re$Geneid[1:nrow(data_ocr)])
+# all.equal(data_ocr$Geneid, data_ocr_re$Geneid[1:nrow(data_ocr)])
 # rinfo = data_ocr_re[, 1:6]
 # data_ocr = data_ocr[, -c(1:6)]
 # data_ocr_re = data_ocr_re[, -c(1:6)]
 # 
 # # Tidy sample names
-# all(colnames(data_ocr) == colnames(data_ocr_re))
+# all.equal(colnames(data_ocr), colnames(data_ocr_re))
 # colnames(data_ocr) = str_extract(colnames(data_ocr), "/([[:alnum:]]+)_clean.bam", group=1)
 # colnames(data_ocr_re) = colnames(data_ocr)
 # 
@@ -138,7 +150,7 @@ convert_ids_in_string = function(df, id_col, id, symbol) {
 # # Total reads, fraction within repeats
 # data_ocr = data.frame(t(data_ocr))
 # data_ocr_re = data.frame(t(data_ocr_re))
-# all(meta$ID == rownames(data_ocr))
+# all.equal(meta$ID, rownames(data_ocr))
 # meta$RIP = rowSums(data_ocr)
 # meta$RIPnR = rowSums(data_ocr_re)
 # meta$FRIR = rowSums(data_ocr_re[, rinfo$is_rep]) / meta$RIPnR
@@ -175,7 +187,7 @@ convert_ids_in_string = function(df, id_col, id, symbol) {
 #   column_to_rownames("id")
 # rinfo = rinfo[colnames(data_ocr_re), ]
 # 
-# save(data_ocr, data_ocr_re, norm_ocr, norm_ocr_re, rinfo, meta, file=paste0(paths$results, "/data.Rdata"))
+# save(data_ocr, data_ocr_re, norm_ocr, norm_ocr_re, rinfo, meta, file=paste0(paths$results, "/prepro.Rdata"))
 
 #### QC SUMMARY ####
 
@@ -209,14 +221,14 @@ convert_ids_in_string = function(df, id_col, id, symbol) {
 #   # Picard MarkDuplicates prints the number of dupes in the log (divide by 2 to get pairs)
 #   s = str_extract(f, "Marking ([0-9]+) records as duplicates", group=1)
 #   qc[sname, "duplicates"] = as.numeric(s) / 2
-#   # I had the pipeline print the number of clean reads 
+#   # I had the pipeline print the number of clean reads
 #   s = str_extract(f, "Clean BAM contains ([0-9]+) pairs", group=1)
 #   qc[sname, "clean"] = as.numeric(s)
 # }
 # 
 # # Verify that qc and fc_report match up
-# all(colnames(fc_report) == rownames(qc))
-# all(colSums(fc_report)/2 == qc$clean)
+# all.equal(colnames(fc_report), rownames(qc))
+# all.equal(unname(colSums(fc_report)/2), qc$clean)
 # # Get frip
 # fc_report = data.frame(t(fc_report))
 # qc$cut_sites = fc_report$Assigned + fc_report$Unassigned_NoFeatures
@@ -227,9 +239,10 @@ convert_ids_in_string = function(df, id_col, id, symbol) {
 
 #### LOAD DATA ####
 
-load(paste0(paths$results, "/data.Rdata"))
+load(paste0(paths$results, "/prepro.Rdata"))
 meta$Genotype = factor(meta$Genotype, levels=c("WT", "KO"))
 
+# Square root transformed tables, for nicer distributions
 # summary(unlist(norm_ocr))
 # summary(unlist(norm_ocr_re))
 # sort(unique(unlist(norm_ocr)))[1:5]
@@ -243,48 +256,34 @@ load(paste0(paths$results, "/data_sqrt.Rdata"))
 
 #### EXPLORATION ####
 
+table(meta$Sex, meta$Genotype)
+
 # Total reads and fraction within repeats
-# <temp storage for report>
-figs$frir = meta %>%
-  ggplot(., aes(x=Genotype, y=FRIR))+
+meta %>%
+  ggplot(., aes(x=Genotype, y=FRIR, fill=Genotype))+
   geom_boxplot()+
   stat_compare_means(label.y=0.37)+
   labs(y="Fraction of reads in repeats")+
-  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))
-ggsave(paste0(paths$results, "/FRIR.png"), width=0.3*w, height=0.4*h, units="mm")
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))+
+  guides(fill="none")
+ggsave(paste0(paths$results, "/frir.pdf"), width=0.3*w_in, height=0.25*h_in)
 summary(lm(FRIR~Genotype+Sex, data=meta))
 
 # PCA for OCR data
-
 pca = prcomp(norm_ocr_sqrt, center=T, scale.=T)
 pca = merge(meta, pca$x, by.x="ID", by.y=0)
-p1=ggplot(pca, aes(x=PC1, y=PC2, color=Genotype))+
+ggplot(pca, aes(x=PC1, y=PC2, color=Genotype, shape=Sex))+
   geom_point()
-p2=ggplot(pca, aes(x=PC1, y=PC2, color=Sex))+
-  geom_point()
-ps = align_patches(p1, p2)
-pdf(paste0(paths$results, "/pca_ocrs.pdf"), width=0.5*w_in, height=0.25*h_in)
-ps
-dev.off()
-# <temp storage for report>
-figs$pca_genotype = p1
-figs$pca_sex = p2
-figs$pca_combined = ggplot(pca, aes(x=PC1, y=PC2, color=Genotype, shape=Sex))+
-  geom_point()
+ggsave(paste0(paths$results, "/pca_ocrs.pdf"), width=0.5*w_in, height=0.25*h_in)
 
 # PCA for OCR+REP data
 pca = prcomp(norm_ocr_re_sqrt, center=T, scale.=T)
 pca = merge(meta, pca$x, by.x="ID", by.y=0)
-p1 = ggplot(pca, aes(x=PC1, y=PC2, color=Genotype))+
+ggplot(pca, aes(x=PC1, y=PC2, color=Genotype, shape=Sex))+
   geom_point()
-p2 = ggplot(pca, aes(x=PC1, y=PC2, color=Sex))+
-  geom_point()
-ps = align_patches(p1, p2)
-pdf(paste0(paths$results, "/pca_ocrs_and_res.pdf"), width=0.5*w_in, height=0.25*h_in)
-ps
-dev.off()
+ggsave(paste0(paths$results, "/pca_ocrs_and_res.pdf"), width=0.5*w_in, height=0.25*h_in)
 
-#### CHOICE <!> ####
+#### REMOVE UNANNOTATED OCRS ####
 
 # Not interested in a few unannotated alternative chromosomes
 alt_chr = rownames(rinfo[is.na(rinfo$annotation) & !rinfo$is_rep, ])
@@ -303,6 +302,7 @@ rinfo[is.na(rinfo$annotation2), "annotation2"] = "Repeat"
 
 #### DIFFERENTIAL ACCESSIBILITY ####
 
+all.equal(rownames(data_ocr_re), meta$ID)
 dge = DGEList(t(data_ocr_re), samples = meta)
 dge = calcNormFactors(dge)
 
@@ -336,7 +336,7 @@ p1=rinfo %>%
   my_volcano(., "sigs", "logFC", "pval", ymax=7.5)+
   scale_color_manual(values=c("#5555cc", "#999999", "#cc5555")) +
   guides(color="none")
-ggsave(paste0(paths$results, "/volcano_ocrs.png"), plot = p1, width=0.6*w, height=0.4*h, units="mm")
+ggsave(paste0(paths$results, "/volcano_ocrs.pdf"), plot = p1, width=0.6*w_in, height=0.4*h_in)
 
 p2=rinfo %>%
   dplyr::filter(annotation == "Repeat") %>%
@@ -344,7 +344,7 @@ p2=rinfo %>%
   my_volcano(., "sigs", "logFC", "pval", xmax=2.7, ymax=2.1)+
   scale_color_manual(values=c("#999999", "#5555cc","#cc5555")) +
   guides(color="none")
-ggsave(paste0(paths$results, "/volcano_res.png"), plot = p2, width=0.6*w, height=0.4*h, units="mm")
+ggsave(paste0(paths$results, "/volcano_res.pdf"), plot = p2, width=0.6*w_in, height=0.4*h_in)
 
 rinfo %>%
   group_by(sigs, annotation2) %>%
@@ -353,36 +353,43 @@ rinfo %>%
   geom_bar(position="fill", stat="identity")+
   scale_y_continuous(expand = c(0,0))+
   labs(fill = "Annotation")
-ggsave(paste0(paths$results, "/da_annotation.png"), width=0.6*w, height=0.3*h, units="mm")
-
-# <temp storage for report>
-figs$volcano_ocrs = p1
-figs$volcano_res = p2
+ggsave(paste0(paths$results, "/da_annotation.pdf"), width=0.6*w_in, height=0.3*h_in)
 
 #### REPEAT BEHAVIOUR ####
 
-tmp = rinfo %>%
+rinfo_l1 = rinfo %>%
   dplyr::filter(is_rep, superf == "LINE/L1") %>%
   mutate(fam = fct_reorder(fam, length/count)) %>%
   mutate(L1Md = grepl("L1Md", fam))
-p1=ggplot(tmp, aes(x=fam, y=length/count, group=1))+
+
+# --- Not filtering by min number of genomic copies ---
+p1=ggplot(rinfo_l1, aes(x=fam, y=length/count, group=1))+
   geom_line()+
   theme(axis.text.x = element_blank(),
-        axis.ticks.x = element_blank())+
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank())+
   labs(y="Average length")
-p2=ggplot(tmp, aes(x=fam, y=logFC, fill=L1Md))+
+p2=rinfo_l1 %>%
+  mutate(type = ifelse(L1Md, "L1Md", "Other")) %>%
+  ggplot(., aes(x=fam, y=logFC, fill=type))+
   geom_bar(stat="identity")+
-  theme(axis.text.x = element_text(angle=45, size=6))
+  theme(axis.text.x = element_text(angle=90, hjust=1, size=6))+
+  labs(x="LINE1 families sorted by average copy length")
 p1/p2 + plot_layout(heights = c(1,2))
-ggsave(paste0(paths$results, "/line1s.png"), width=2*w, height=0.5*h, units="mm")
+ggsave(paste0(paths$results, "/line1s_unfilt.pdf"), width=2*w_in, height=0.5*h_in)
 
-# <modified for report>
+# --- Removing very low copy number line1s ---
 min_copies=250
-tmp %>%
+ggplot(rinfo_l1, aes(count))+
+  geom_histogram(bins=100)+
+  geom_vline(xintercept = min_copies)
+table(rinfo_l1$count < min_copies)
+rinfo_l1 %>%
   dplyr::filter(count <= min_copies) %>%
   pull(fam) %>%
   sort()
-p1 = tmp %>%
+
+p1 = rinfo_l1 %>%
   dplyr::filter(count > min_copies) %>%
   ggplot(., aes(x=fam, y=length/count, group=1))+
   geom_line()+
@@ -390,15 +397,15 @@ p1 = tmp %>%
         axis.ticks.x = element_blank(),
         axis.title.x = element_blank())+
   labs(y="Avg. copy\nlength (bp)")
-p2 = tmp %>%
+p2 = rinfo_l1 %>%
   dplyr::filter(count > min_copies) %>%
-  ggplot(., aes(x=fam, y=logFC, fill=L1Md))+
+  mutate(type = ifelse(L1Md, "L1Md", "Other")) %>%
+  ggplot(., aes(x=fam, y=logFC, fill=type))+
   geom_bar(stat="identity")+
-  theme(axis.text.x = element_text(angle=90, size=5, hjust=1))+
+  theme(axis.text.x = element_text(angle=90, size=6, hjust=1))+
   labs(x="LINE1 families sorted by average copy length")
-p1/p2
-figs$l1_length_effect_top = p1
-figs$l1_length_effect_bot = p2
+p1/p2 + plot_layout(heights = c(1,2))
+ggsave(paste0(paths$results, "/line1s_filt.pdf"), width=2*w_in, height=0.5*h_in)
 
 #### GENE ONTOLOGY ####
 
@@ -430,7 +437,7 @@ genes_up = rinfo2 %>%
 genes_down = rinfo2 %>%
   dplyr::filter(annotation == "Promoter", sigs == "Sig-") %>%
   distinct(geneId, .keep_all = T)
-intersect(genes_up$geneId, genes_down$geneId) # Negligible
+intersect(genes_up$geneId, genes_down$geneId) # None
 go$up_pro = enrichGO(genes_up$geneId, OrgDb = org.Mm.eg.db, ont = "BP", 
                  universe = universe, keyType = "ENSEMBL", pvalueCutoff = 0.05)
 go$down_pro = enrichGO(genes_down$geneId, OrgDb = org.Mm.eg.db, ont = "BP", 
@@ -438,7 +445,7 @@ go$down_pro = enrichGO(genes_down$geneId, OrgDb = org.Mm.eg.db, ont = "BP",
 go$up_pro = as.data.frame(go$up_pro)
 go$down_pro = as.data.frame(go$down_pro)
 
-sapply(go, dim)
+sapply(go, nrow)
 
 # Convert ensembl ids to symbols and save
 ensids = unique(rinfo2$geneId)
@@ -449,12 +456,12 @@ id_conv = data.frame(
   drop_na()
 for (res in names(go)) {
   go[[res]] = convert_ids_in_string(go[[res]], "geneID", id_conv$ens, id_conv$symbol)
-  write.table(go[[res]], file=paste0(paths$results, "/go_results_", res, ".tsv"), sep="\t", quote=F)
+  write.csv(go[[res]], file=paste0(paths$tables, "/go_results_", res, ".csv"))
 }
 
 rinfo$symbol = id_conv[rinfo$geneId, "symbol"]
-write.table(rinfo, file=paste0(paths$results, "/da_results.tsv"), sep="\t", quote=F)
-write.table(subset(rinfo, annotation2 == "Promoter"), file=paste0(paths$results, "/da_results_promoters.tsv"), sep="\t", quote=F, row.names = F)
+write.csv(rinfo, file=paste0(paths$tables, "/resultsDA_all.csv"))
+write.csv(subset(rinfo, annotation2 == "Promoter"), file=paste0(paths$tables, "/resultsDA_pro.tsv"))
 
 #### CHECKPOINT ####
 
@@ -463,94 +470,37 @@ load(paste0(paths$results, "/checkpoint.Rdata"))
 
 #### QUICK GO PLOT ####
 
+# Only upreg, because not enough promoters are closed for sig enrichment
 go$up_pro %>%
-  slice_min(p.adjust, n=20) %>%
+  dplyr::filter(p.adjust < 0.05) %>% # Always ensure sig
   mutate(GeneRatio = sapply(GeneRatio, function(x) eval(parse(text=x)))) %>%
   mutate(BgRatio = sapply(BgRatio, function(x) eval(parse(text=x)))) %>%
-  mutate(enrichment = GeneRatio / BgRatio) %>%
-  mutate(Description = fct_reorder(Description, enrichment)) %>%
-  ggplot(., aes(x=Description, y=enrichment, fill = -log10(pvalue)))+
+  mutate(Enrichment = GeneRatio / BgRatio) %>%
+  slice_max(Enrichment, n=20) %>% # Most enriched
+  mutate(Description = fct_reorder(Description, Enrichment)) %>%
+  ggplot(., aes(x=Description, y=Enrichment, fill = -log10(pvalue)))+
   geom_bar(stat="identity")+
   coord_flip()+
+  scale_y_continuous(expand = expansion(mult=c(0,0.1)))+
   scale_fill_continuous(low="blue", high="red")+
-  ggtitle("Most significant  GO terms associated with promoters that open")
-ggsave(paste0(paths$results, "/go_top20.png"), width=2*w, height=0.6*h, units="mm")
+  ggtitle("Most enriched GO terms associated with promoters that open")
+ggsave(paste0(paths$results, "/go_top20_by_enrich.pdf"), width=2*w_in, height=0.6*h_in)
 
-# <for report>
-# Reminder: only upregulated has significant, probs because downregulated is a smaller number of OCRs
-# Here at the down reg gene promoters anyways
-View(go$up_pro)
-figs$go_sortPval_proup20 = go$up_pro %>%
-  dplyr::filter(p.adjust < 0.05) %>%
+go$up_pro %>%
+  dplyr::filter(p.adjust < 0.05) %>% # Always ensure sig
   slice_min(p.adjust, n=20) %>%
   mutate(GeneRatio = sapply(GeneRatio, function(x) eval(parse(text=x)))) %>%
   mutate(BgRatio = sapply(BgRatio, function(x) eval(parse(text=x)))) %>%
   mutate(Enrichment = GeneRatio / BgRatio) %>%
-  mutate(Description = if_else(str_length(Description) > 60, str_c(str_sub(Description, 1, 57), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, -log10(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=Enrichment))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-figs$go_sortEnr_proup20 = go$up_pro %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  slice_min(p.adjust, n=20) %>%
-  mutate(GeneRatio = sapply(GeneRatio, function(x) eval(parse(text=x)))) %>%
-  mutate(BgRatio = sapply(BgRatio, function(x) eval(parse(text=x)))) %>%
-  mutate(Enrichment = GeneRatio / BgRatio) %>%
-  mutate(Description = if_else(str_length(Description) > 60, str_c(str_sub(Description, 1, 57), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, Enrichment)) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=Enrichment))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-figs$go_sortPval_proup15 = go$up_pro %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  slice_min(p.adjust, n=15) %>%
-  mutate(GeneRatio = sapply(GeneRatio, function(x) eval(parse(text=x)))) %>%
-  mutate(BgRatio = sapply(BgRatio, function(x) eval(parse(text=x)))) %>%
-  mutate(Enrichment = GeneRatio / BgRatio) %>%
-  mutate(Description = if_else(str_length(Description) > 60, str_c(str_sub(Description, 1, 57), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, -log10(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=Enrichment))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-figs$go_sortEnr_proup15 = go$up_pro %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  slice_min(p.adjust, n=15) %>%
-  mutate(GeneRatio = sapply(GeneRatio, function(x) eval(parse(text=x)))) %>%
-  mutate(BgRatio = sapply(BgRatio, function(x) eval(parse(text=x)))) %>%
-  mutate(Enrichment = GeneRatio / BgRatio) %>%
-  mutate(Description = if_else(str_length(Description) > 60, str_c(str_sub(Description, 1, 57), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, Enrichment)) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=Enrichment))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-
-figs$go_sortPval_proup8 = go$up_pro %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  slice_min(p.adjust, n=8) %>%
-  mutate(GeneRatio = sapply(GeneRatio, function(x) eval(parse(text=x)))) %>%
-  mutate(BgRatio = sapply(BgRatio, function(x) eval(parse(text=x)))) %>%
-  mutate(Enrichment = GeneRatio / BgRatio) %>%
-  mutate(Description = if_else(str_length(Description) > 50, str_c(str_sub(Description, 1, 47), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, -log10(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=Enrichment))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
+  slice_min(p.adjust, n=20) %>% # Most significant
+  mutate(Description = fct_reorder(Description, -pvalue)) %>%
+  ggplot(., aes(x=Description, y=Enrichment, fill = -log10(pvalue)))+
+  geom_bar(stat="identity")+
+  coord_flip()+
+  scale_y_continuous(expand = expansion(mult=c(0,0.1)))+
+  scale_fill_continuous(low="blue", high="red")+
+  ggtitle("Most significant GO terms associated with promoters that open")
+ggsave(paste0(paths$results, "/go_top20_by_pval.pdf"), width=2*w_in, height=0.6*h_in)
 
 #### SENMAYO ####
 
@@ -560,50 +510,51 @@ figs$go_sortPval_proup8 = go$up_pro %>%
 
 ##### Write seqs #####
 
-# rinfo3 = rinfo2 %>%
-#   dplyr::filter(!grepl("\\.", chr)) %>% # Remove weird chromosomes (not many)
-#   dplyr::filter(length < 2000) # Remove abnormal length (not many)
-# 
-# tmp = list(
-#   up = subset(rinfo3, sigs == "Sig+"),
-#   up_pro = subset(rinfo3, sigs == "Sig+" & annotation2 == "Promoter"),
-#   down = subset(rinfo3, sigs == "Sig-"),
-#   down_pro = subset(rinfo3, sigs == "Sig-" & annotation2 == "Promoter"),
-#   bg = subset(rinfo3, sigs == "NotSig"),
-#   bg_pro = subset(rinfo3, sigs == "NotSig" & annotation2 == "Promoter"))
-# set.seed(1337)
-# tmp$bg_subsamp = tmp$bg[sample(nrow(tmp$bg), round(0.1*nrow(tmp$bg))), ]
-# sapply(tmp, nrow)
-# peak_seqs = list()
+rinfo3 = rinfo2 %>%
+  dplyr::filter(!grepl("\\.", chr)) %>% # Remove weird chromosomes (not many)
+  dplyr::filter(length < 2000) # Remove abnormal length (not many)
+
+tmp = list(
+  up = subset(rinfo3, sigs == "Sig+"),
+  up_pro = subset(rinfo3, sigs == "Sig+" & annotation2 == "Promoter"),
+  down = subset(rinfo3, sigs == "Sig-"),
+  down_pro = subset(rinfo3, sigs == "Sig-" & annotation2 == "Promoter"),
+  bg = subset(rinfo3, sigs == "NotSig"),
+  bg_pro = subset(rinfo3, sigs == "NotSig" & annotation2 == "Promoter"))
+set.seed(1337)
+tmp$bg_subsamp = tmp$bg[sample(nrow(tmp$bg), round(0.1*nrow(tmp$bg))), ]
+sapply(tmp, nrow)
+peak_seqs = list()
+# Sequence in a 500bp window. Works better for enrichment
+for (nm in names(tmp)) {
+  mid = (tmp[[nm]]$start+tmp[[nm]]$end)/2
+  peak_range_fixed = GRanges(
+    seqnames = paste0("chr", tmp[[nm]]$chr),
+    ranges = IRanges(
+      start = mid-250,
+      end = mid+250
+    )
+  )
+  peak_seq_fixed = getSeq(BSgenome.Mmusculus.UCSC.mm39, peak_range_fixed)
+  peak_seqs[[paste0(nm, "_fixed")]] = peak_seq_fixed
+  write.fasta(sequences = as.list(peak_seq_fixed),
+              names = rownames(tmp[[nm]]),
+              file = paste0(paths$seqs, "/", nm, "_fixed.fa"))
+}
+# # Exact sequence of the ocr. Doesn't work well with enrichment.
 # for (nm in names(tmp)) {
-#   # # Real peak range
-#   # peak_range = GRanges(
-#   #   seqnames = paste0("chr", tmp[[nm]]$chr),
-#   #   ranges = IRanges(
-#   #     start = tmp[[nm]]$start,
-#   #     end = tmp[[nm]]$end
-#   #   )
-#   # )
-#   # peak_seq = getSeq(BSgenome.Mmusculus.UCSC.mm39, peak_range)
-#   # peak_seqs[[nm]] = peak_seq
-#   # write.fasta(sequences = as.list(peak_seq), 
-#   #             names = rownames(tmp[[nm]]),
-#   #             file = paste0(paths$seqs, "/", nm, ".fa"))
-#   # Fixed 500bp peak range
-#   mid = (tmp[[nm]]$start+tmp[[nm]]$end)/2
-#   # st = ifelse(mid>=250, mid-250, 0)
-#   peak_range_fixed = GRanges(
+#   peak_range = GRanges(
 #     seqnames = paste0("chr", tmp[[nm]]$chr),
 #     ranges = IRanges(
-#       start = mid-250,
-#       end = mid+250
+#       start = tmp[[nm]]$start,
+#       end = tmp[[nm]]$end
 #     )
 #   )
-#   peak_seq_fixed = getSeq(BSgenome.Mmusculus.UCSC.mm39, peak_range_fixed)
-#   peak_seqs[[paste0(nm, "_fixed")]] = peak_seq_fixed
-#   write.fasta(sequences = as.list(peak_seq_fixed), 
+#   peak_seq = getSeq(BSgenome.Mmusculus.UCSC.mm39, peak_range)
+#   peak_seqs[[nm]] = peak_seq
+#   write.fasta(sequences = as.list(peak_seq),
 #               names = rownames(tmp[[nm]]),
-#               file = paste0(paths$seqs, "/", nm, "_fixed.fa"))
+#               file = paste0(paths$seqs, "/", nm, ".fa"))
 # }
 
 ##### Make figures #####
@@ -631,7 +582,6 @@ for (i in 1:(length(cuti)-1)) {
   motif_pos_down[[colnames(df)[3]]] = df
 }
 
-
 motif_pos_up$MEME.1 %>%
   mutate(movingMean = rollmean(HACTTCCTCTTTYN, k=25, fill=0) / sum(HACTTCCTCTTTYN)) %>%
   dplyr::filter(abs(DB.0.MOTIF) < 230) %>%
@@ -640,7 +590,7 @@ motif_pos_up$MEME.1 %>%
   labs(x="Position", y="Probability")+
   scale_y_continuous(breaks=c(0, 0.002, 0.004, 0.006), minor_breaks = F)+
   theme(axis.title = element_text(size=8))
-ggsave(paste0(paths$paper_figs, "/motif_pos_spi1.png"), width = w*0.3, height=h*0.1, units="mm")
+ggsave(paste0(paths$results, "/motif_pos_spi1.pdf"), width = w_in*0.3, height=h_in*0.1)
 
 motif_pos_down$MEME.1 %>%
   mutate(movingMean = rollmean(TGTTTHYTTTGGC, k=25, fill=0) / sum(TGTTTHYTTTGGC)) %>%
@@ -650,21 +600,22 @@ motif_pos_down$MEME.1 %>%
   labs(x="Position", y="Probability")+
   scale_y_continuous(breaks=c(0, 0.002, 0.004, 0.006), minor_breaks = F)+
   theme(axis.title = element_text(size=8))
-ggsave(paste0(paths$paper_figs, "/motif_pos_fox.png"), width = w*0.3, height=h*0.1, units="mm")
+ggsave(paste0(paths$results, "/motif_pos_fox.pdf"), width = w_in*0.3, height=h_in*0.1)
 
 
 # Needs to be space separated
 motifs = readJASPARMatrix("./motif/pfms.txt", matrixClass = "PFM")
 
-png(paste0(paths$paper_figs, "/motif_spi1.png"), width = w*0.6, height=h*0.25, units="mm", res=180)
+pdf(paste0(paths$results, "/motif_spi1.pdf"), width = w_in*0.6, height=h_in*0.25)
 seqLogo(toICM(motifs[[1]], pseudocounts=0.8, schneider=TRUE), xfontsize = 10, yaxis=F)
 dev.off()
 
-png(paste0(paths$paper_figs, "/motif_fox.png"), width = w*0.6, height=h*0.25, units="mm", res=180)
+pdf(paste0(paths$results, "/motif_fox.pdf"), width = w_in*0.6, height=h_in*0.25)
 seqLogo(toICM(motifs[[2]], pseudocounts=0.8, schneider=TRUE), xfontsize = 10, yaxis=F)
 dev.off()
 
 #### SEX CHECK ####
+
 all.equal(rownames(norm_ocr), meta$ID)
 rinfo[rinfo$symbol %in% c("Xist", "Uty"), ]
 meta %>%
@@ -680,45 +631,90 @@ meta %>%
   geom_jitter(width=0.2)+
   facet_wrap(~Genotype)
 
-#### FIGURE ASSEMBLY (added for report) ####
+#### PAPER ASSEMBLIES ####
 
-paths$paper_figs = paste0(paths$results, "/prelim_paper_figs")
-fformat = ".pdf"
-fformat = ".png"
-names(figs)
+theme_set(theme_classic())
 
-figs$pca_combined #+ theme(legend.position = "top")
-ggsave(paste0(paths$paper_figs, "/pca_combined", fformat), width = w*0.5, height=h*0.3, units = "mm")
-figs$pca_genotype
-ggsave(paste0(paths$paper_figs, "/pca_genotype", fformat), width = w*0.5, height=h*0.3, units = "mm")
-figs$pca_sex
-ggsave(paste0(paths$paper_figs, "/pca_sex", fformat), width = w*0.5, height=h*0.3, units = "mm")
-
-figs$volcano_ocrs + guides(color="none")
-ggsave(paste0(paths$paper_figs, "/volcano_ocr", fformat), width = w*0.5, height=h*0.35, units = "mm")
-figs$volcano_res + guides(color="none")
-ggsave(paste0(paths$paper_figs, "/volcano_res", fformat), width = w*0.5, height=h*0.35, units = "mm")
-
-figs$frir
-ggsave(paste0(paths$paper_figs, "/frir", fformat), width = w*0.35, height=h*0.4, units = "mm")
-
-figs$l1_length_effect_top / figs$l1_length_effect_bot + plot_layout(heights = c(1,2.7))
-ggsave(paste0(paths$paper_figs, "/line1s", fformat), width=1.2*w, height=0.4*h, units="mm")
-(figs$l1_length_effect_top / figs$l1_length_effect_bot) + guides(fill="none") + plot_layout(heights = c(1,2.7))
-ggsave(paste0(paths$paper_figs, "/line1s_nolegend", fformat), width=1*w, height=0.4*h, units="mm")
-
-
-# for (plt in names(figs)[grepl("go",names(figs))]) {
-#   this_h = 0.55 * h
-#   this_h = ifelse(grepl("15", plt), this_h * 0.75, this_h)
-#   ggsave(plot = figs[[plt]], paste0(paths$paper_figs, "/", plt, fformat), width = w*0.8, height=this_h, units = "mm")
-# }
-
-figs$go_sortPval_proup8+
+p1 = rinfo %>%
+  dplyr::filter(annotation != "Repeat") %>%
+  my_volcano(., "sigs", "logFC", "pval", ymax=7.5, raster=T)+
+  scale_color_manual(values=c("#5555cc", "#999999", "#cc5555")) +
+  guides(color="none")+
+  theme(panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())+
+  labs(x=expression(log[2]*"FC"), y=expression(-log[10]*"(pval)"))
+p2 = go$up_pro %>%
+  dplyr::filter(p.adjust < 0.05) %>%
+  slice_min(p.adjust, n=8) %>%
+  mutate(GeneRatio = sapply(GeneRatio, function(x) eval(parse(text=x)))) %>%
+  mutate(BgRatio = sapply(BgRatio, function(x) eval(parse(text=x)))) %>%
+  mutate(Enrichment = GeneRatio / BgRatio) %>%
+  mutate(Description = str_replace(Description, "tumor necrosis factor", "TNF")) %>%
+  mutate(Description = if_else(str_length(Description) > 50, str_c(str_sub(Description, 1, 47), "..."), as.character(Description))) %>%
+  mutate(Description = fct_reorder(Description, -log10(p.adjust))) %>%
+  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=Enrichment))+
+  geom_point(pch = 21)+
+  scale_fill_gradient2(low="blue", high="red")+
   scale_size(limits=c(4.5, 6.5), breaks = c(4.5, 5.5, 6.5))+
-  theme(legend.position = "bottom", 
-        legend.direction = "horizontal",
-        legend.box="vertical",
-        legend.justification = c(1, 1),
-        legend.margin = margin())
-ggsave(paste0(paths$paper_figs, "/go_sortPval_proup8", fformat), width = w*0.55, height=0.36*h, units = "mm")
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())+
+  labs(size=expression(-log[10]*("p.adj")))
+p = (p1|p2)+plot_layout(widths=c(8,2))
+ggsave(plot = p, paste0(paths$paper_figs, "/top_row.pdf"), width = w_in, height=0.3*h_in)
+
+pdf(paste0(paths$paper_figs, "/motif_spi1.pdf"), width = w_in*0.4, height=h_in*0.2)
+seqLogo(toICM(motifs[[1]], pseudocounts=0.8, schneider=TRUE), xfontsize = 10, yaxis=F)
+dev.off()
+pdf(paste0(paths$paper_figs, "/motif_fox.pdf"), width = w_in*0.4, height=h_in*0.2)
+seqLogo(toICM(motifs[[2]], pseudocounts=0.8, schneider=TRUE), xfontsize = 10, yaxis=F)
+dev.off()
+
+motif_pos_up$MEME.1 %>%
+  mutate(movingMean = rollmean(HACTTCCTCTTTYN, k=25, fill=0) / sum(HACTTCCTCTTTYN)) %>%
+  dplyr::filter(abs(DB.0.MOTIF) < 230) %>%
+  ggplot(., aes(DB.0.MOTIF, movingMean))+
+  geom_line()+
+  labs(x="Position", y="Probability")+
+  scale_x_continuous(expand = expansion(mult=0))+
+  scale_y_continuous(breaks=c(0, 0.002, 0.004, 0.006), minor_breaks = F)+
+  theme(axis.title = element_text(size=8))
+ggsave(paste0(paths$paper_figs, "/motif_pos_spi1.pdf"), width = 0.32*w_in, height=0.115*h_in)
+motif_pos_down$MEME.1 %>%
+  mutate(movingMean = rollmean(TGTTTHYTTTGGC, k=25, fill=0) / sum(TGTTTHYTTTGGC)) %>%
+  dplyr::filter(abs(DB.0.MOTIF) < 230) %>%
+  ggplot(., aes(DB.0.MOTIF, movingMean))+
+  geom_line()+
+  labs(x="Position", y="Probability")+
+  scale_x_continuous(expand = expansion(mult=0))+
+  scale_y_continuous(breaks=c(0, 0.002, 0.004, 0.006), minor_breaks = F)+
+  theme(axis.title = element_text(size=8))
+ggsave(paste0(paths$paper_figs, "/motif_pos_fox.pdf"), width = 0.32*w_in, height=0.115*h_in)
+
+
+p1 = rinfo_l1 %>%
+  dplyr::filter(count > min_copies) %>%
+  ggplot(., aes(x=fam, y=length/count, group=1))+
+  geom_line()+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())+
+  labs(y="Avg. copy\nlength (bp)")
+p2 = rinfo_l1 %>%
+  dplyr::filter(count > min_copies) %>%
+  mutate(type = ifelse(L1Md, "L1Md*", "Other")) %>%
+  ggplot(., aes(x=fam, y=logFC, fill=type))+
+  geom_col(width=1)+
+  labs(x="LINE1 families sorted by average copy length")+
+  scale_fill_manual(values=c("#bb33bb", "#999999"))+
+  labs(y=expression(log[2]*"FC"), fill="Subfamily")+
+  theme(axis.text.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank(),
+        legend.position = "bottom")
+p1/p2 + plot_layout(heights = c(1,3))
+ggsave(paste0(paths$paper_figs, "/line1s_filt.pdf"), width=w_in, height=0.3*h_in)

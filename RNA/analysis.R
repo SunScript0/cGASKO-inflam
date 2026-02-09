@@ -7,8 +7,13 @@ library(rasterpdf)
 library(patchwork)
 library(enrichplot)
 library(GOSemSim)
+library(scales)
+library(colorspace)
 
-setwd("/scratch/fmorandi/internal/John/cGAS_KO/PAPER/RNA2")
+### Notes ###
+# Gotta compare the new de results. They seem very similar but fewer are sig. Maybe filtering of genes changes slightly
+
+setwd("/scratch/fmorandi/internal/John/cGAS_KO/PAPER_CODE/RNA")
 
 paths = list()
 paths$data = "./pipeline_out"
@@ -18,17 +23,12 @@ paths$paper_figs = paste0(paths$results, "/prelim_paper_figs")
 
 dir.create(paths$results, showWarnings = F)
 dir.create(paths$tables, showWarnings = F)
-
-#### FIGURE STORAGE (added for report) ####
-
-figs = list()
+dir.create(paths$paper_figs, showWarnings = F)
 
 #### PLOTTING SETTINGS ####
 
-w = 174 # mm
-h = 230
-w_in = w*0.0393701
-h_in = h*0.0393701
+w_in = 7.5 # 8.5 without margin
+h_in = 10 # 11 without margin
 
 #### FUNCTIONS ####
 
@@ -94,6 +94,39 @@ my_gseReactome = function(table, logFC_column, org) {
   return(res)
 }
 
+my_read_gmt = function(file) {
+  lines = readLines(file)
+  lines = strsplit(lines, "\t")
+  ids = vapply(lines, function(y) y[1], character(1))
+  descs = vapply(lines, function(y) y[2], character(1))
+  genes = lapply(lines, "[", -c(1:2))
+  names(genes) = ids
+  names(descs) = ids
+  gmt = stack(genes)
+  gmt$desc = descs[gmt$ind]
+  colnames(gmt) = c("gene", "term", "desc")
+  return(gmt[, c("term", "gene", "desc")])
+}
+
+my_gse_custom = function(table, logFC_column, sym_col, gmt) { # Have to specify symbol col because humans 
+  options(warn = 1)
+  # Make gene list
+  gene_list = table[[logFC_column]]
+  names(gene_list) = table[[sym_col]]
+  gene_list = sort(gene_list, decreasing = TRUE)
+  # Run GSEA
+  set.seed(1337)
+  res = GSEA(
+    geneList=gene_list,
+    TERM2GENE = gmt,
+    verbose = TRUE,
+    pvalueCutoff = 1.1,
+    minGSSize = 5, # Important or some small custom lists were not shown
+    maxGSSize = 1400,
+    BPPARAM = SerialParam())
+  return(res)
+}
+
 convert_ids_in_string = function(df, geneid, symbol) {
   conversions = symbol
   names(conversions) = geneid
@@ -121,11 +154,9 @@ meta %>%
   ggplot(., aes(Genotype, Cgas))+
   geom_boxplot()+
   theme(axis.title.x = element_blank())
-ggsave(paste0(paths$results, "/ko_validation.png"), width = w*1, height=h*0.3, units = "mm")
+ggsave(paste0(paths$results, "/ko_validation.pdf"), width = w_in*0.3, height=h_in*0.3)
 
 #### PCA ####
-
-##### Genes #####
 
 pca = prcomp(t(log1p(norm_ge)), center=T, scale.=T)
 pca = merge(meta, pca$x[, c("PC1", "PC2")], by.x="SampleID", by.y=0)
@@ -136,41 +167,7 @@ for (var in c("Genotype", "Sex")) {
 }
 
 ps = align_patches(ps)
-pdf(paste0(paths$results, "/pca_ge.pdf"), width=1*w_in, height=0.5*h_in)
-ps
-dev.off()
-
-##### <Extra for report> #####
-
-all.equal(meta$SampleID, colnames(norm_ge))
-tmp = norm_ge[rowSums(norm_ge) > 0, ] # Some columns are all-zero so remove
-pca = prcomp(t(log1p(tmp)), center=T, scale.=T)
-pca = merge(meta, pca$x[, c("PC1", "PC2")], by.x="SampleID", by.y=0)
-pca = pca %>%
-  mutate(Genotype2 = str_remove(Genotype, "cGAS")) %>%
-  mutate(Genotype2 = factor(Genotype2, levels=c("WT", "KO")))
-figs$pca_combined = ggplot(pca, aes(x=PC1, y=PC2, color=Genotype2, shape=Sex))+
-  geom_point()+
-  labs(color = "Genotype")
-figs$pca_sex = ggplot(pca, aes(x=PC1, y=PC2, color=Sex))+
-  geom_point()+
-  labs(color = "Sex")
-figs$pca_genotype = ggplot(pca, aes(x=PC1, y=PC2, color=Genotype2))+
-  geom_point()+
-  labs(color = "Genotype")
-
-##### Repeats #####
-
-pca = prcomp(t(log1p(norm_re)), center=T, scale.=T)
-pca = merge(meta, pca$x[, c("PC1", "PC2")], by.x="SampleID", by.y=0)
-ps = list()
-for (var in c("Genotype", "Sex")) { 
-  ps[[var]] = ggplot(pca, aes(x=PC1, y=PC2, color=.data[[var]]))+
-    geom_point()
-}
-
-ps = align_patches(ps)
-pdf(paste0(paths$results, "/pca_re.pdf"), width=1*w_in, height=0.5*h_in)
+pdf(paste0(paths$results, "/pca_ge.pdf"), width=0.6*w_in, height=0.3*h_in)
 ps
 dev.off()
 
@@ -178,58 +175,15 @@ dev.off()
 
 all.equal(colnames(counts_ge), meta$SampleID)
 all.equal(colnames(counts_re), meta$SampleID)
-counts = rbind(counts_ge, counts_re) # Rejoin ge an re
 
-##### Together #####
-
-# Based on comparison with qPCR, FISH, IF data, this method does not appear appropriate
-
-# dge = DGEList(counts, samples = meta)
-# design = model.matrix(~0+Genotype+Sex, data=dge$samples)
-# contrasts = makeContrasts(
-#   cGASKOvsWT=GenotypecGASKO-GenotypeWT,
-#   levels = design)
-# 
-# # Filter further
-# keep = filterByExpr(dge, design=design)
-# perc_kept = 100 * colSums(counts[keep, ]) / colSums(counts)
-# hist(perc_kept, breaks=100)
-# dge = dge[keep, ]
-# dim(dge)
-# 
-# # TMM normalization
-# dge = calcNormFactors(dge)
-# ggplot(dge$samples, aes(x=norm.factors))+
-#   geom_histogram()
-# 
-# dge = estimateDisp(dge, design)
-# fit = glmFit(dge, design)
-# 
-# resultsDE = list()
-# for (cont in colnames(contrasts)) {
-#   print(cont)
-#   resultsDE[[cont]] = as.data.frame(glmLRT(fit, contrast=contrasts[, cont])) %>%
-#     dplyr::select(-logCPM, -LR) %>%
-#     dplyr::rename(pval = PValue) %>%
-#     mutate(padj = p.adjust(pval, method="BH")) %>%
-#     rename_with(function(x) paste0(x, "_", cont)) %>%
-#     rownames_to_column("geneID")
-# }
-# resultsDE = Reduce(function(x, y) merge(x, y, by="geneID"), resultsDE)
-# 
-# # Split results into genes and res
-# resultsDE_ge = merge(ginfo, resultsDE, by.x=0, by.y="geneID") %>%
-#   dplyr::rename("geneID"="Row.names")
-# resultsDE_re = merge(rinfo, resultsDE, by.x=0, by.y="geneID") %>%
-#   dplyr::rename("geneID"="Row.names")
+design = model.matrix(~0+Genotype+Sex, data=meta)
+contrasts = makeContrasts(
+  cGASKOvsWT=GenotypecGASKO-GenotypeWT,
+  levels = design)
 
 ##### Genes #####
 
 dge = DGEList(counts_ge, samples = meta) 
-design = model.matrix(~0+Genotype+Sex, data=dge$samples)
-contrasts = makeContrasts(
-  cGASKOvsWT=GenotypecGASKO-GenotypeWT,
-  levels = design)
 
 # Filter further
 keep = filterByExpr(dge, design=design)
@@ -339,12 +293,6 @@ raster_pdf(paste0(paths$results, "/volcanos_ge.pdf"), width=1*w_in, height=0.5*h
 ps
 dev.off()
 
-##### <Extra for report> #####
-
-figs$volcano = my_volcano(
-  resultsDE_ge, paste0("logFC_", "cGASKOvsWT"), paste0("pval_", "cGASKOvsWT"), paste0("sig_", "cGASKOvsWT"), clip_axes=T, clip_quantile=0.999)+
-  ggtitle("cGASKOvsWT", subtitle=sprintf("padj < %.2f, |logFC| > %.2f", max_padj, min_logFC))
-
 ##### Repeats #####
 
 pdf(paste0(paths$results, "/volcanos_re.pdf"), width=2*w_in, height=0.5*h_in)
@@ -368,7 +316,9 @@ for (cont in colnames(contrasts)) {
 }
 dev.off()
 
-#### FRIR (added for report) ####
+#### TRANSPOSONS ####
+
+##### Frir #####
 
 # For ATAC this was based on the number of reads in repeats over the number of total reads counted
 # When using a GTF file containing both peaks and repeats
@@ -378,34 +328,39 @@ dev.off()
 all.equal(colnames(counts_re), meta$SampleID)
 meta$RiR = colSums(counts_re)
 
-ggplot(meta, aes(Genotype, RiR/input_reads))+
+# Reads in repears in general
+p1 = ggplot(meta, aes(Genotype, RiR/input_reads, fill=Genotype))+
   geom_boxplot()
-ggplot(meta, aes(Genotype, RiR/uniquely_mapped))+
+p2 = ggplot(meta, aes(Genotype, RiR/uniquely_mapped, fill=Genotype))+
   geom_boxplot()
-figs$frir = meta %>%
-  mutate(Genotype = fct_recode(Genotype, "KO" = "cGASKO")) %>%
-  mutate(Genotype = factor(Genotype, levels=c("WT", "KO"))) %>%
-  ggplot(., aes(Genotype, RiR/annotated))+
-  geom_boxplot()+
-  labs(y="Fraction of reads in repeats")+
-  stat_compare_means(label.y = 0.11)+
-  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))
+p3 = ggplot(meta, aes(Genotype, RiR/annotated, fill=Genotype))+
+  geom_boxplot()
 
-# TEs or REs?
+# Reads in transposons
 rinfo$selfish = rinfo$class %in% c("LINE", "SINE", "LTR", "DNA", "DNA?", "Retroposon", "RC")
 meta$RiT = colSums(counts_re[rinfo$selfish, ])
-ggplot(meta, aes(Genotype, RiT/annotated))+
-  geom_boxplot()+
-  labs(y="Fraction of reads in repeats")
+p4 = ggplot(meta, aes(Genotype, RiT/input_reads, fill=Genotype))+
+  geom_boxplot()
+p5 = ggplot(meta, aes(Genotype, RiT/uniquely_mapped, fill=Genotype))+
+  geom_boxplot()
+p6 = ggplot(meta, aes(Genotype, RiT/annotated, fill=Genotype))+
+  geom_boxplot()
 
-#### LINE LENGTH EFFECT ####
+((p1|p2|p3)/(p4|p5|p6)) +
+  plot_layout(guides="collect")&
+  theme(axis.title.x = element_blank())
+ggsave(paste0(paths$results, "/frir.pdf"), width = 0.85*w_in, height = 0.5*h_in)
+
+##### Line length effect #####
 
 resultsL1 = resultsDE_re %>%
   dplyr::filter(superf=="LINE/L1") %>%
   mutate(young = grepl("L1Md", fam)) %>%
   mutate(fam=fct_reorder(fam, young))
-hist(resultsL1$meanExpr, breaks=50) # Mean CPM (not log)
-# resultsL1 = subset(resultsL1, meanExpr > 3)
+ggplot(resultsL1, aes(meanExpr))+
+  geom_histogram(bins=100)+
+  coord_cartesian(xlim=c(0,200))
+resultsL1 = subset(resultsL1, meanExpr > 5)
 
 ps = list()
 for (cont in colnames(contrasts)) {
@@ -414,14 +369,13 @@ for (cont in colnames(contrasts)) {
     theme(axis.text.x = element_text(angle=90, hjust=1, size=7))
 }
 
-pdf(paste0(paths$results, "/LINE_length_effect.pdf"), width=2*w_in, height=0.5*h_in)
+pdf(paste0(paths$results, "/LINE_length_effect.pdf"), width=1.6*w_in, height=0.5*h_in)
 ps
 dev.off()
 
-#### ZOOM ON L1Md (added for report) ####
+##### L1Md #####
 
-# figs$l1md_zoom = 
-figs$l1md_zoom = resultsL1 %>%
+resultsL1 %>%
   dplyr::filter(grepl("L1Md", fam)) %>%
   mutate(type = str_extract(fam, "(L1Md[:alnum:]+)_", group=1))%>%
   mutate(subtype = str_extract(fam, "L1Md[:alnum:]+_(.+)", group=1))%>%
@@ -430,39 +384,39 @@ figs$l1md_zoom = resultsL1 %>%
   geom_bar(stat="identity")+
   geom_text(vjust=0, size=6)+
   theme(axis.title.x=element_blank())+
-  facet_grid(~type, scales = "free_x", space="free_x")
-figs$l1mda_zoom = resultsL1 %>%
-  mutate(L1MdA = grepl("L1MdA", fam)) %>%
-  dplyr::filter(L1MdA) %>%
-  ggplot(., aes(fam, logFC_cGASKOvsWT))+
-  geom_bar(stat="identity")+
-  theme(axis.title.x=element_blank())
-figs$l1mda123_zoom = resultsL1 %>%
-  dplyr::filter(fam %in% c("L1MdA_I", "L1MdA_II", "L1MdA_III")) %>%
-  mutate(SigStar = stars.pval(pval_cGASKOvsWT)) %>%
-  ggplot(., aes(fam, logFC_cGASKOvsWT, label=SigStar))+
-  geom_bar(stat="identity")+
-  geom_text(vjust=-0.5, size=8)+
-  theme(axis.title.x=element_blank())+
-  ylim(0, 0.30)
+  facet_grid(~type, scales = "free_x", space="free_x")+
+  scale_y_continuous(expand = expansion(mult=c(0.05, 0.2)))+
+  theme(strip.text = element_text(size = 7))
+ggsave(paste0(paths$results, "/zoom_L1Md.pdf"), width = w_in*1, height=h_in*0.3)
 
 #### GSEA ####
 
+##### Run #####
+
 # gsea = list()
 # 
+# # Gene ontology
 # for (ont in c("BP", "MF", "CC")) {
 #   for (cont in colnames(contrasts)) {
 #     gsea[[paste0("GO_", ont)]][[cont]] = my_gseGO(resultsDE_ge, paste0("logFC_", cont), org.Mm.eg.db, ont)
 #   }
 # }
+# 
+# # Reactome
 # for (cont in colnames(contrasts)) {
 #   gsea$Reactome[[cont]] = my_gseReactome(resultsDE_ge, paste0("logFC_", cont), "mouse")
 # }
-
+# 
+# # Sen Mayo
+# gmt = my_read_gmt("./custom_gsets/SAUL_SEN_MAYO.v2023.2.Mm.edited.gmt")
+# for (cont in colnames(contrasts)) {
+#   gsea$SenMayo[[cont]] = my_gse_custom(resultsDE_ge, paste0("logFC_", cont), "geneID", gmt)
+# }
+# 
 # save(gsea, file=paste0(paths$results, "/gsea.Rdata"))
 load(paste0(paths$results, "/gsea.Rdata"))
 
-#### GSEA DOTPLOTS ####
+##### Dotplots #####
 
 for (ont in names(gsea)) {
   for (cont in colnames(contrasts)) {
@@ -470,7 +424,9 @@ for (ont in names(gsea)) {
     gsea[[ont]][[cont]]$Comparison = cont
     if (ont == "Reactome") {
       gsea[[ont]][[cont]] = convert_ids_in_string(gsea[[ont]][[cont]], ginfo$entrezgene_id, ginfo$mgi_symbol)
-    } else {
+    } else if (ont == "SenMayo") {
+      next # Ids are already good
+    }else {
       gsea[[ont]][[cont]] = convert_ids_in_string(gsea[[ont]][[cont]], ginfo$Geneid, ginfo$mgi_symbol)
     }
   }
@@ -478,7 +434,8 @@ for (ont in names(gsea)) {
 
 max_padj_gsea = 0.05
 
-for (ont in names(gsea)) {
+# For the larger dbs
+for (ont in c("GO_BP", "GO_MF", "GO_CC", "Reactome")) {
   ps = list()
   for (cont in colnames(contrasts)) {
     tmp = gsea[[ont]][[cont]] %>%
@@ -502,236 +459,7 @@ for (ont in names(gsea)) {
   dev.off()
 }
 
-View(gsea$Reactome$cGASKOvsWT)
-
-#### CONDENSED GSEA (added for report) ####
-
-
-##### Biological process #####
-
-desc_len = 70
-nterms = 15
-
-# # Both signs, by NES
-# figs$gsea_sortNES_both15 = gsea$GO_BP$cGASKOvsWT %>%
-#   dplyr::filter(p.adjust < 0.05) %>%
-#   mutate(Description = fct_reorder(Description, abs(NES))) %>%
-#   mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
-#   group_by(Sign) %>%
-#   slice_max(abs(NES), n=15) %>%
-#   ungroup() %>%
-#   mutate(Description = if_else(str_length(Description) > 60, str_c(str_sub(Description, 1, 57), "..."), as.character(Description))) %>%
-#   mutate(Description = fct_reorder(Description, NES)) %>%
-#   ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-#   geom_point(pch = 21)+
-#   scale_fill_gradient2(low="blue", high="red")+
-#   theme(axis.title = element_blank(),
-#         axis.ticks.x = element_blank(),
-#         axis.text.x = element_blank())
-# Both signs, by pval
-figs$gsea_sortPval_both15=gsea$GO_BP$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
-  group_by(Sign) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  ungroup() %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, sign(NES)*-log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-# Upreg, by pval
-figs$gsea_sortPval_up15 = gsea$GO_BP$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  dplyr::filter(NES > 0) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, -log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-# Downreg, by pval
-figs$gsea_sortPval_down15 = gsea$GO_BP$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  dplyr::filter(NES < 0) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-
-# === 10 terms each ===
-
-nterms = 10
-figs$gsea_sortPval_both10=gsea$GO_BP$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
-  group_by(Sign) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  ungroup() %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, sign(NES)*-log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-# Upreg, by pval
-figs$gsea_sortPval_up10 = gsea$GO_BP$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  dplyr::filter(NES > 0) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, -log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-# Downreg, by pval
-figs$gsea_sortPval_down10 = gsea$GO_BP$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  dplyr::filter(NES < 0) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-
-# === 10 terms each ===
-
-nterms = 8
-figs$gsea_sortPval_both8=gsea$GO_BP$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
-  group_by(Sign) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  ungroup() %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, sign(NES)*-log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-# Upreg, by pval
-figs$gsea_sortPval_up8 = gsea$GO_BP$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  dplyr::filter(NES > 0) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, -log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-# Downreg, by pval
-figs$gsea_sortPval_down8 = gsea$GO_BP$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  dplyr::filter(NES < 0) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-
-
-##### Cellular component #####
-
-# Max text shorter here
-desc_len = 24
-nterms = 5
-figs$gsea_CC_sortPval = gsea$GO_CC$cGASKOvsWT %>%
-  dplyr::filter(p.adjust < 0.05) %>%
-  mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
-  group_by(Sign) %>%
-  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
-  slice_head(n=nterms) %>%
-  ungroup() %>%
-  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
-  mutate(Description = fct_reorder(Description, sign(NES)*-log(p.adjust))) %>%
-  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
-  geom_point(pch = 21)+
-  scale_fill_gradient2(low="blue", high="red")+
-  theme(axis.title = element_blank(),
-        axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())
-  
-
-#### EXTRA GSEA (added for report) ####
-
-my_read_gmt = function(file) {
-  lines = readLines(file)
-  lines = strsplit(lines, "\t")
-  ids = vapply(lines, function(y) y[1], character(1))
-  descs = vapply(lines, function(y) y[2], character(1))
-  genes = lapply(lines, "[", -c(1:2))
-  names(genes) = ids
-  names(descs) = ids
-  gmt = stack(genes)
-  gmt$desc = descs[gmt$ind]
-  colnames(gmt) = c("gene", "term", "desc")
-  return(gmt[, c("term", "gene", "desc")])
-}
-
-my_gse_custom = function(table, logFC_column, sym_col, gmt) { # Have to specify symbol col because humans 
-  options(warn = 1)
-  # Make gene list
-  gene_list = table[[logFC_column]]
-  names(gene_list) = table[[sym_col]]
-  gene_list = sort(gene_list, decreasing = TRUE)
-  # Run GSEA
-  set.seed(1337)
-  res = GSEA(
-    geneList=gene_list,
-    TERM2GENE = gmt,
-    verbose = TRUE,
-    pvalueCutoff = 1.1,
-    minGSSize = 5, # Important or some small custom lists were not shown
-    maxGSSize = 1400,
-    BPPARAM = SerialParam())
-  return(res)
-}
-
-gmt = my_read_gmt("./custom_gsets/SAUL_SEN_MAYO.v2023.2.Mm.edited.gmt")
-sen_mayo = my_gse_custom(resultsDE_ge, "logFC_cGASKOvsWT", "geneID", gmt) %>%
-  as.data.frame()
-tmp = resultsDE_ge %>% # There are inflammatory genes but not necessarily senescence related
-  dplyr::filter(padj_cGASKOvsWT < 0.05)
-
-figs$sen_mayo = sen_mayo %>%
+gsea$SenMayo$cGASKOvsWT %>%
   mutate(Description = str_remove(Description, "SenMayo_")) %>%
   mutate(Description = fct_reorder(Description, NES)) %>%
   ggplot(., aes(x=1, y=Description, size=-log10(pvalue), fill=NES))+
@@ -739,65 +467,350 @@ figs$sen_mayo = sen_mayo %>%
   scale_fill_gradient2(low="blue", high="red")+
   theme(axis.title = element_blank(),
         axis.ticks.x = element_blank(),
-        axis.text.x = element_blank())+
+        axis.text.x = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank())+
   ggtitle("SenMayo")
+ggsave(paste0(paths$results, "/gsea_SenMayo.pdf"), width=0.55*w_in, height=0.35*h_in)
 
 #### SAVE ####
 
-write.csv(resultsDE_ge, paste0(paths$tables, "/resultsDE.csv"))
-write.csv(resultsDE_re, paste0(paths$tables, "/resultsDE_re.csv"))
+# save.image(paste0(paths$results, "/checkpoint.Rdata"))
 
-#### SAVE FIG OBJ (added for report) ####
+# write.csv(resultsDE_ge, paste0(paths$tables, "/resultsDE_ge.csv"))
+# write.csv(resultsDE_re, paste0(paths$tables, "/resultsDE_re.csv"))
+# 
+# for (ont in names(gsea)) {
+#   write.csv(gsea[[ont]]$cGASKOvsWT, paste0(paths$tables, "/gsea_", ont, ".csv"))
+# }
 
-# save(figs, file=paste0(paths$results, "/figs_for_report.Rdata"))
-load(paste0(paths$results, "/figs_for_report.Rdata"))
+load(paste0(paths$results, "/checkpoint.Rdata"))
 
-#### FIGURE ASSEMBLY (added for report) ####
+#### PAPER PANELS ####
 
-fformat = ".png"
 fformat = ".pdf"
 
-figs$pca_combined #+ theme(legend.position = "top")
-ggsave(paste0(paths$paper_figs, "/pca_combined", fformat), width = w*0.5, height=h*0.3, units = "mm")
-figs$pca_genotype
-ggsave(paste0(paths$paper_figs, "/pca_genotype", fformat), width = w*0.5, height=h*0.3, units = "mm")
-figs$pca_sex
-ggsave(paste0(paths$paper_figs, "/pca_sex", fformat), width = w*0.5, height=h*0.3, units = "mm")
+set_theme(theme_classic())
+ccodes = c(
+  "WT" = "#3A647E",
+  "cGAS KO" = "#FE7F2D"
+)
 
-figs$volcano + 
-  guides(color="none") + 
-  labs(title=NULL, subtitle=NULL)
-ggsave(paste0(paths$paper_figs, "/volcano", fformat), width = w*0.5, height=h*0.35, units = "mm")
-
-figs$frir
-ggsave(paste0(paths$paper_figs, "/frir", fformat), width = w*0.5, height=h*0.4, units = "mm")
-
-figs$sen_mayo
-ggsave(paste0(paths$paper_figs, "/gsea_SenMayo", fformat), width = w*0.6, height=h*0.4, units = "mm")
-
-
-figs$l1md_zoom+
-  scale_y_continuous(expand = expansion(mult=c(0.05, 0.2)))+
-  theme(strip.text = element_text(size = 7))
-ggsave(paste0(paths$paper_figs, "/zoom_L1Md", fformat), width = w*1, height=h*0.3, units = "mm")
-figs$l1mda_zoom+
-  theme(axis.text.x = element_text(angle=90, hjust = 1))
-ggsave(paste0(paths$paper_figs, "/zoom_L1MdA", fformat), width = w*0.5, height=h*0.4, units = "mm")
-
-figs$l1mda123_zoom
-ggsave(paste0(paths$paper_figs, "/zoom_L1MdA123", fformat), width = w*0.5, height=h*0.35, units = "mm")
-
-for (plt in names(figs)[grepl("gsea_sort",names(figs))]) {
-  this_h = ifelse(grepl("both", plt), 0.68, 0.34) * h
-  this_h = ifelse(grepl("10", plt), this_h * 0.66, this_h)
-  this_h = ifelse(grepl("8", plt), this_h * 0.53, this_h)
-  p = figs[[plt]]+
-    theme(panel.grid.major.x = element_blank(), 
-          panel.grid.minor.x = element_blank())
-  ggsave(plot = p, paste0(paths$paper_figs, "/", plt, fformat), width = w*1, height=this_h, units = "mm")
+geom_bar_auto = function(data, aes_map, ccodes, binwidth_rel = 1/50, dots=T, error=T) {
+  yvar = as_label(aes_map$y)
+  print(binwidth_rel)
+  binwidth = binwidth_rel * max(data[[yvar]], na.rm = TRUE)
+  p = ggplot(data, aes_map)+
+    geom_bar(stat="summary", color="black")+
+    scale_fill_manual(values=ccodes)+
+    scale_y_continuous(expand = expansion(mult=c(0, 0.15)))+
+    theme(legend.position = "none",
+          axis.title.x = element_blank())
+  if (dots) p = p + geom_dotplot(binaxis = "y", stackdir = "center", fill='black', binwidth = binwidth)
+  if (error) p = p + geom_errorbar(stat = "summary",width = 0.2,linewidth = 0.5)
+  return(p)
 }
 
-figs$gsea_CC_sortPval+
-  theme(panel.grid.major.x = element_blank(), 
-        panel.grid.minor.x = element_blank())
-ggsave(paste0(paths$paper_figs, "/gsea_CC_sortPval", fformat), width = w*0.55, height=0.3*h, units = "mm")
+##### Volcano #####
+
+my_volcano(resultsDE_ge, "logFC_cGASKOvsWT", "pval_cGASKOvsWT", "sig_cGASKOvsWT", clip_axes=T, clip_quantile=0.999)+
+  guides(color="none")+
+  theme(panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())+
+  labs(x=expression(log[2]*"FC"), y=expression(-log[10]*"(pval)"))
+ggsave(paste0(paths$paper_figs, "/volcano", fformat), width = w_in*0.45, height=h_in*0.33)
+
+##### GSEA: BP #####
+
+View(gsea$GO_BP$cGASKOvsWT)
+View(gsea$GO_CC$cGASKOvsWT)
+
+desc_len = 70
+nterms = 8 
+
+# Top 8 by NES
+gsea$GO_BP$cGASKOvsWT %>%
+  dplyr::filter(p.adjust < 0.05) %>%
+  mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
+  group_by(Sign) %>%
+  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
+  # arrange(p.adjust, -abs(NES)) %>% # First sort by NES, then padj
+  slice_head(n=nterms) %>%
+  ungroup() %>%
+  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
+  mutate(Description = fct_reorder(Description, sign(NES)*-log(p.adjust) + 0.001 * NES)) %>% # +eps*NES resolves ties
+  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
+  geom_point(pch = 21)+
+  scale_fill_gradient2(low="blue", high="red")+
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())
+ggsave(paste0(paths$paper_figs, "/gsea_BP_v1", fformat), width = w_in*0.85, height=h_in*0.38)
+
+# Top 8 by significance
+gsea$GO_BP$cGASKOvsWT %>%
+  dplyr::filter(p.adjust < 0.05) %>%
+  mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
+  group_by(Sign) %>%
+  # arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
+  arrange(p.adjust, -abs(NES)) %>% # First sort by NES, then padj
+  slice_head(n=nterms) %>%
+  ungroup() %>%
+  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
+  mutate(Description = fct_reorder(Description, sign(NES)*-log(p.adjust) + 0.001 * NES)) %>% # +eps*NES resolves ties
+  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
+  geom_point(pch = 21)+
+  scale_fill_gradient2(low="blue", high="red")+
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())
+ggsave(paste0(paths$paper_figs, "/gsea_BP_v2", fformat), width = w_in*0.85, height=h_in*0.38)
+
+##### GSEA: CC #####
+
+desc_len = 25
+nterms = 5 # Top 5 by NES
+gsea$GO_CC$cGASKOvsWT %>%
+  dplyr::filter(p.adjust < 0.05) %>%
+  mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
+  group_by(Sign) %>%
+  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
+  slice_head(n=nterms) %>%
+  ungroup() %>%
+  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
+  mutate(Description = fct_reorder(Description, sign(NES)*-log(p.adjust))) %>%
+  ggplot(., aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
+  geom_point(pch = 21)+
+  scale_fill_gradient2(low="blue", high="red")+
+  scale_size_continuous(breaks = scales::breaks_pretty(n = 4))+
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())
+ggsave(paste0(paths$paper_figs, "/gsea_CC", fformat), width = w_in*0.5, height=h_in*0.33)
+
+##### GSEA: SenMayo #####
+
+gsea$SenMayo$cGASKOvsWT %>%
+  mutate(Description = str_remove(Description, "SenMayo_")) %>%
+  mutate(Description = str_replace_all(Description, "_", " ")) %>%
+  mutate(Description = fct_reorder(Description, NES)) %>%
+  ggplot(., aes(x=1, y=Description, size=-log10(pvalue), fill=NES))+
+  geom_point(pch = 21)+
+  scale_fill_gradient2(low="blue", high="red")+
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())
+ggsave(paste0(paths$paper_figs, "/gsea_SenMayo", fformat), width = w_in*0.55, height=h_in*0.33)
+
+##### L1Md #####
+
+tmp = resultsL1 %>%
+  filter(grepl("L1Md", fam)) %>%
+  mutate(type = str_extract(fam, "(L1Md[:alnum:]+)_", group=1))%>%
+  mutate(subtype = str_extract(fam, "L1Md[:alnum:]+_(.+)", group=1))%>%
+  mutate(SigStar = stars.pval(pval_cGASKOvsWT)) %>%
+  group_by(type) %>%
+  mutate(subtype_rank = (rank(subtype)-1)/7) %>%
+  ungroup() %>%
+  # mutate(base_col = hue_pal()(length(unique(type)))[match(type, unique(type))]) %>%
+  mutate(base_col = brewer_pal(palette = "Dark2")(length(unique(type)))[match(type, unique(type))]) %>%
+  mutate(fill_col = darken(base_col, amount = 0.5 * subtype_rank))
+ggplot(tmp, aes(subtype, logFC_cGASKOvsWT, label = SigStar)) +
+  geom_bar(stat = "identity", aes(fill = fill_col)) +
+  geom_text(vjust = 0, size = 6) +
+  facet_grid(~type, scales = "free_x", space = "free_x") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.2))) +
+  scale_fill_identity() +  # use literal hex colors from fill_col
+  labs(y = expression(log[2]*"FC")) +
+  guides(fill = "none") +
+  theme(
+    axis.title.x = element_blank(),
+    strip.text = element_text(size = 7),
+    strip.background = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    axis.line = element_blank())
+ggsave(paste0(paths$paper_figs, "/L1Md", fformat), width = w_in*1, height=h_in*0.33)
+
+##### FRIR, FRG #####
+
+all.equal(meta$SampleID, colnames(counts_ge))
+meta = meta %>%
+  mutate(Genotype = fct_recode(Genotype, "cGAS KO" = "cGASKO")) %>%
+  mutate(RiG = colSums(counts_ge))
+
+ggplot(meta, aes(Genotype, RiR/(uniquely_mapped + multi_mapped), fill=Genotype))+
+  geom_boxplot()+
+  labs(y="Fraction of reads in repeats")+
+  stat_compare_means(label.y = 0.11, method="t.test")+
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))+
+  scale_fill_manual(values=ccodes)+
+  guides(fill="none")+
+  theme(axis.title.x = element_blank())
+ggsave(paste0(paths$paper_figs, "/frir_vs_mapped", fformat), width = w_in*0.3, height=h_in*0.33)
+ggplot(meta, aes(Genotype, RiR/annotated, fill=Genotype))+
+  geom_boxplot()+
+  labs(y="Fraction of reads in repeats")+
+  stat_compare_means(label.y = 0.11, method="t.test")+
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))+
+  scale_fill_manual(values=ccodes)+
+  guides(fill="none")+
+  theme(axis.title.x = element_blank())
+ggsave(paste0(paths$paper_figs, "/frir_vs_annotated", fformat), width = w_in*0.3, height=h_in*0.33)
+
+ggplot(meta, aes(Genotype, RiG/(uniquely_mapped + multi_mapped), fill=Genotype))+
+  geom_boxplot()+
+  labs(y="Fraction of reads in genes")+
+  stat_compare_means(label.y = 0.82, method="t.test")+
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))+
+  scale_fill_manual(values=ccodes)+
+  guides(fill="none")+
+  theme(axis.title.x = element_blank())
+ggsave(paste0(paths$paper_figs, "/frig_vs_mapped", fformat), width = w_in*0.3, height=h_in*0.33)
+
+
+
+#### PAPER ASSEMBLIES ####
+
+fformat = ".pdf"
+
+theme_set(theme_classic())
+ccodes = c(
+  "WT" = "#3A647E",
+  "cGAS KO" = "#FE7F2D"
+)
+
+w_in = 7.5 # 8.5 without margin
+h_in = 10 # 11 without margin
+
+
+##### Figure 2 #####
+
+p1 = my_volcano(resultsDE_ge, "logFC_cGASKOvsWT", "pval_cGASKOvsWT", "sig_cGASKOvsWT", clip_axes=T, clip_quantile=0.999)+
+  guides(color="none")+
+  theme(panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())+
+  labs(x=expression(log[2]*"FC"), y=expression(-log[10]*"(pval)"))
+
+# NES and p.adj range so we can get a common legend for GSEA
+desc_len = 30
+tmp1 = gsea$GO_CC$cGASKOvsWT %>%
+  dplyr::filter(p.adjust < 0.05) %>%
+  mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
+  group_by(Sign) %>%
+  arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
+  slice_head(n=5) %>%
+  ungroup() %>%
+  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
+  mutate(Description = fct_reorder(Description, sign(NES)*-log(p.adjust))) # +eps*NES resolves ties
+desc_len = 35
+tmp2 = gsea$GO_BP$cGASKOvsWT %>%
+  dplyr::filter(p.adjust < 0.05) %>%
+  mutate(Sign = ifelse(sign(NES) > 0, "Activated", "Suppressed")) %>%
+  group_by(Sign) %>%
+  # arrange(-abs(NES), p.adjust) %>% # First sort by NES, then padj
+  arrange(p.adjust, -abs(NES)) %>% # First sort by NES, then padj
+  slice_head(n=8) %>%
+  ungroup() %>%
+  mutate(Description = str_replace(Description, "tumor necrosis factor", "TNF")) %>%
+  mutate(Description = if_else(str_length(Description) > desc_len, str_c(str_sub(Description, 1, desc_len-3), "..."), as.character(Description))) %>%
+  mutate(Description = fct_reorder(Description, sign(NES)*-log(p.adjust) + 0.001 * NES))
+range_nes = range(c(tmp1$NES, tmp2$NES))
+range_padj = range(-log10(c(tmp1$p.adjust, tmp2$p.adjust)))
+
+p2 = ggplot(tmp1, aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
+  geom_point(pch = 21)+
+  scale_fill_gradient2(low="blue", high="red", limits=range_nes)+
+  scale_size_continuous(limits=range_padj)+
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())+
+  labs(size=expression(-log[10]*("p.adj")))
+p3 = ggplot(tmp2, aes(x=1, y=Description, size=-log10(p.adjust), fill=NES))+
+  geom_point(pch = 21)+
+  scale_fill_gradient2(low="blue", high="red", limits=range_nes)+
+  scale_size_continuous(limits=range_padj)+
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank())+
+  labs(size=expression(-log[10]*("p.adj")))+
+  guides(fill="none", size="none") # Using the same as p2 so i'll just plot once
+
+(p1+p2+plot_spacer()+free(p3, side="l", type = "space"))+plot_layout(widths=c(8.2,1.8), heights = c(5,8), guides="collect")
+ggsave(paste0(paths$paper_figs, "/figure2_assembly", fformat), width = w_in, height=h_in*0.6)
+
+##### Figure S4 #####
+
+p1 = gsea$SenMayo$cGASKOvsWT %>%
+  mutate(Description = str_remove(Description, "SenMayo_")) %>%
+  mutate(Description = str_replace_all(Description, "_", " ")) %>%
+  mutate(Description = fct_reorder(Description, NES)) %>%
+  mutate(sig = stars.pval(pvalue)) %>%
+  ggplot(., aes(x=1, y=Description, size=-log10(pvalue), fill=NES, label=sig))+
+  geom_point(pch = 21)+
+  geom_text(color="white")+
+  scale_fill_gradient2(low="blue", high="red")+
+  labs(size=expression(-log[10]*("p.val")))+
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        axis.line = element_blank(),
+        legend.position = "bottom")
+p2 = ggplot(meta, aes(Genotype, RiG/(uniquely_mapped + multi_mapped), fill=Genotype))+
+  geom_boxplot()+
+  labs(y="Fraction of reads in genes")+
+  stat_compare_means(label.y = 0.82, method="t.test")+
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))+
+  scale_fill_manual(values=ccodes)+
+  guides(fill="none")+
+  theme(axis.title.x = element_blank())
+p3 = ggplot(meta, aes(Genotype, RiR/(uniquely_mapped + multi_mapped), fill=Genotype))+
+  geom_boxplot()+
+  labs(y="Fraction of reads in repeats")+
+  stat_compare_means(label.y = 0.11, method="t.test")+
+  scale_y_continuous(expand = expansion(mult = c(0.1, 0.2)))+
+  scale_fill_manual(values=ccodes)+
+  guides(fill="none")+
+  theme(axis.title.x = element_blank())
+p4 = resultsL1 %>%
+  filter(grepl("L1Md", fam)) %>%
+  mutate(type = str_extract(fam, "(L1Md[:alnum:]+)_", group=1))%>%
+  mutate(subtype = str_extract(fam, "L1Md[:alnum:]+_(.+)", group=1))%>%
+  mutate(SigStar = stars.pval(pval_cGASKOvsWT)) %>%
+  group_by(type) %>%
+  mutate(subtype_rank = (rank(subtype)-1)/7) %>%
+  ungroup() %>%
+  # mutate(base_col = hue_pal()(length(unique(type)))[match(type, unique(type))]) %>%
+  mutate(base_col = brewer_pal(palette = "Dark2")(length(unique(type)))[match(type, unique(type))]) %>%
+  mutate(fill_col = darken(base_col, amount = 0.5 * subtype_rank)) %>%
+  ggplot(., aes(subtype, logFC_cGASKOvsWT, label = SigStar)) +
+  geom_bar(stat = "identity", aes(fill = fill_col)) +
+  geom_text(vjust = 0, size = 6) +
+  facet_grid(~type, scales = "free_x", space = "free_x") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.2))) +
+  scale_fill_identity() +  # use literal hex colors from fill_col
+  labs(y = expression(log[2]*"FC")) +
+  guides(fill = "none") +
+  theme(
+    axis.title.x = element_blank(),
+    strip.text = element_text(size = 7),
+    strip.background = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+    axis.line = element_blank())
+p=(p1+plot_spacer()+p2+p3+plot_layout(nrow=1, widths=c(1.8,1,3,3)))
+ggsave(plot = p, paste0(paths$paper_figs, "/figureS4_assembly1", fformat), width = w_in, height=h_in*0.35)
+
+ggsave(plot = p4, paste0(paths$paper_figs, "/figureS4_assembly2", fformat), width = w_in, height=h_in*0.3)
+  

@@ -1,0 +1,15 @@
+FileName	Genotype	Sex	Tissue	Target	Replicate	SampleName	Background
+dcGasF1_H3K27me3	cGAS_KO	F	Unknown	H3K27me3	1	dcGasF1_H3K27me3	
+dcGasF1_H3K9me3	cGAS_KO	F	Unknown	H3K9me3	1	dcGasF1_H3K9me3	
+dcGasF2_H3K27me3	cGAS_KO	F	Unknown	H3K27me3	2	dcGasF2_H3K27me3	
+dcGasF2_H3K9me3	cGAS_KO	F	Unknown	H3K9me3	2	dcGasF2_H3K9me3	
+dcGasF3_H3K27me3	cGAS_KO	F	Unknown	H3K27me3	3	dcGasF3_H3K27me3	
+dcGasF3_H3K9me3	cGAS_KO	F	Unknown	H3K9me3	3	dcGasF3_H3K9me3	
+dcGasF3_IgG	cGAS_KO	F	Unknown	IgG	3	dcGasF3_IgG	
+WTF1_H3K27me3	WT	F	Unknown	H3K27me3	1	WTF1_H3K27me3	
+WTF1_H3K9me3	WT	F	Unknown	H3K9me3	1	WTF1_H3K9me3	
+WTF2_H3K27me3	WT	F	Unknown	H3K27me3	2	WTF2_H3K27me3	
+WTF2_H3K9me3	WT	F	Unknown	H3K9me3	2	WTF2_H3K9me3	
+WTF3_H3K27me3	WT	F	Unknown	H3K27me3	3	WTF3_H3K27me3	
+WTF3_H3K9me3	WT	F	Unknown	H3K9me3	3	WTF3_H3K9me3	
+WTF3_IgG	WT	F	Unknown	IgG	3	WTF3_IgG	

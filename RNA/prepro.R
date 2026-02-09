@@ -2,7 +2,7 @@ library(tidyverse)
 library(data.table)
 library(biomaRt)
 
-setwd("/scratch/fmorandi/internal/John/cGAS_KO/RNA2")
+setwd("/scratch/fmorandi/internal/John/cGAS_KO/PAPER_CODE/RNA")
 
 paths = list()
 paths$data = "./pipeline_out"

@@ -1,0 +1,7 @@
+Sample	Genotype	Barcode
+WT1	WT	barcode19
+WT2	WT	barcode20
+WT3	WT	barcode21
+cGASKO1	cGASKO	barcode22
+cGASKO2	cGASKO	barcode23
+cGASKO3	cGASKO	barcode24
